@@ -1,0 +1,33 @@
+stages:
+  - load-test
+
+load-test:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "pipeline"
+  image:
+    name: alfabankru-preprod.binary.alfabank.ru/alfabank/java/infra/k6-docker-image:v0.45.0
+    entrypoint: [ '' ]
+  stage: load-test
+  allow_failure: false
+  script:
+    - |
+      export TEST_ID=$(cat /proc/sys/kernel/random/uuid);
+      export GRAFANA_LINK="http://prometheus-grafana.k8ng.alfa.link/d/01npcT44k/official-k6-test-result?orgId=1&var-DS_PROMETHEUS=victoria-metrics&var-testid=$TEST_ID&var-scenario=All&var-url=All&var-metrics=k6_http_req_waiting_seconds&from=now-1h&to=now&refresh=5s"
+      
+      echo "Load test profile path =" $LOAD_PROFILE_PATH
+      echo "Ingress host =" $INGRESS_HOST
+      echo "Test id =" $TEST_ID;
+      echo "Grafana link =" $GRAFANA_LINK
+
+      exit_code=0
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_PROMETHEUS_RW_SERVER_URL=http://vminsert.k8ng.alfa.link/insert/0/prometheus/api/v1/write k6 run -o experimental-prometheus-rw -e INGRESS_HOST=$INGRESS_HOST --tag testid=$TEST_ID $LOAD_PROFILE_PATH || exit_code=1
+      
+      if [ "$exit_code" == "0" ]; then
+        echo "Push success event";
+        curl -X POST $PLATFORM_TEST_NOTIFICATION_API -H "Content-Type: application/json" -d '{"text": "Нагрузочное тестирование прошло успешно [Ссылка на пайп]('$CI_PIPELINE_URL'), [Графана]('$GRAFANA_LINK')", "channel": "'${NOTIFICATION_CHANNEL}'", "alias": "✔️ Нагрузочное тестирование прошло успешно"}';
+        exit 0;
+      else
+        echo "Push failed event"
+        curl -X POST $PLATFORM_TEST_NOTIFICATION_API -H "Content-Type: application/json" -d '{"text": "Нагрузочное тестирование завершилось с ошибкой [Ссылка на пайп]('$CI_PIPELINE_URL'), [Графана]('$GRAFANA_LINK')", "channel": "'${NOTIFICATION_CHANNEL}'", "alias": "❌ Нагрузочное тестирование завершилось с ошибкой"}';
+        exit 1;
+      fi
